@@ -16,12 +16,11 @@
  */
 package org.geotools.data.ogr;
 
+import static org.geotools.data.Query.ALL_PROPERTIES;
+
+import com.google.common.collect.Lists;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import org.geotools.data.EmptyFeatureReader;
 import org.geotools.data.FeatureReader;
 import org.geotools.data.FilteringFeatureReader;
@@ -43,6 +42,7 @@ import org.opengis.feature.simple.SimpleFeatureType;
 import org.opengis.feature.type.AttributeDescriptor;
 import org.opengis.feature.type.GeometryDescriptor;
 import org.opengis.filter.Filter;
+import org.opengis.filter.expression.PropertyName;
 import org.opengis.filter.sort.SortBy;
 import org.opengis.filter.sort.SortOrder;
 import org.opengis.referencing.crs.CoordinateReferenceSystem;
@@ -198,33 +198,35 @@ class OGRFeatureSource extends ContentFeatureSource {
             SimpleFeatureType sourceSchema = getSchema();
             SimpleFeatureType querySchema = sourceSchema;
             SimpleFeatureType targetSchema = sourceSchema;
-            String[] properties = query.getPropertyNames();
-            if (properties != null && properties.length > 0) {
-                targetSchema = SimpleFeatureTypeBuilder.retype(sourceSchema, properties);
+            List<PropertyName> properties = query.getProperties();
+            if (properties != ALL_PROPERTIES) {
+                List<String> propertyNames =
+                        Lists.transform(properties, PropertyName::getPropertyName);
+                targetSchema = SimpleFeatureTypeBuilder.retype(sourceSchema, propertyNames);
                 querySchema = targetSchema;
                 // if we have a filter we have to include in the queried features also the
                 // attribute needed to evaluate both the pre-filter and post-filter (the pre-filter
                 // evaluation just does not work when using setIgnoredFields down in this method)
                 if (query.getFilter() != Filter.INCLUDE) {
-                    Set<String> queriedAttributes = new HashSet<String>(Arrays.asList(properties));
                     FilterAttributeExtractor extraAttributeExtractor =
                             new FilterAttributeExtractor();
                     query.getFilter().accept(extraAttributeExtractor, null);
-                    Set<String> extraAttributeSet =
-                            new HashSet<String>(extraAttributeExtractor.getAttributeNameSet());
-                    extraAttributeSet.removeAll(queriedAttributes);
-                    if (extraAttributeSet.size() > 0) {
-                        String[] queryProperties =
-                                new String[properties.length + extraAttributeSet.size()];
-                        System.arraycopy(properties, 0, queryProperties, 0, properties.length);
-                        String[] extraAttributes =
-                                extraAttributeSet.toArray(new String[extraAttributeSet.size()]);
-                        System.arraycopy(
-                                extraAttributes,
-                                0,
-                                queryProperties,
-                                properties.length,
-                                extraAttributes.length);
+
+                    // preserve attribute ordering
+                    Set<String> queriedAttributes = new LinkedHashSet<>(propertyNames);
+
+                    boolean somethingAdded = false;
+                    for (String name : extraAttributeExtractor.getAttributeNameSet()) {
+                        // any empty name is replaced by the geometry descriptor.
+                        if ("".equals(name))
+                            name = sourceSchema.getGeometryDescriptor().getLocalName();
+
+                        somethingAdded |= queriedAttributes.add(name);
+                    }
+
+                    if (somethingAdded) {
+                        // turn it back into a List again.
+                        List<String> queryProperties = new ArrayList<>(queriedAttributes);
                         querySchema =
                                 SimpleFeatureTypeBuilder.retype(sourceSchema, queryProperties);
                     }
